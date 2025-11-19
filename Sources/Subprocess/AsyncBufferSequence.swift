@@ -317,8 +317,6 @@ extension AsyncBufferSequence {
                       continue // avoid consuming composite newlines
                     }
                     switch first {
-                    case nullUnit:
-                      return yield()
                     case carriageReturn:
                         // Swallow up any subsequent LF
                         guard let next = try await nextFromSource() else {
