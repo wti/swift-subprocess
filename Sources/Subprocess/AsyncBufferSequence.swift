@@ -106,7 +106,8 @@ public struct AsyncBufferSequence: AsyncSequence, @unchecked Sendable {
         return LineSequence(
             underlying: self,
             encoding: UTF8.self,
-            bufferingPolicy: .maxLineLength(128 * 1024)
+            bufferingPolicy: .maxLineLength(128 * 1024),
+            useNullDelimiter: false
         )
     }
 
@@ -119,7 +120,29 @@ public struct AsyncBufferSequence: AsyncSequence, @unchecked Sendable {
         encoding: Encoding.Type,
         bufferingPolicy: LineSequence<Encoding>.BufferingPolicy = .maxLineLength(128 * 1024)
     ) -> LineSequence<Encoding> {
-        return LineSequence(underlying: self, encoding: encoding, bufferingPolicy: bufferingPolicy)
+      return LineSequence(
+        underlying: self,
+        encoding: encoding,
+        bufferingPolicy: bufferingPolicy,
+        useNullDelimiter: false
+      )
+    }
+
+    /// Creates a line sequence to iterate through a `AsyncBufferSequence` of null-delimited segments.
+    /// - Parameters:
+    ///   - encoding: The target encoding for String
+    ///   - bufferingPolicy: How should back-pressure be handled
+    /// - Returns: A `LineSequence` to iterate though this `AsyncBufferSequence` null-delimited segments
+    public func nullDelimitedSegments<Encoding: _UnicodeEncoding>(
+        encoding: Encoding.Type,
+        bufferingPolicy: LineSequence<Encoding>.BufferingPolicy = .maxLineLength(128 * 1024)
+    ) -> LineSequence<Encoding> {
+      return LineSequence(
+        underlying: self,
+        encoding: encoding,
+        bufferingPolicy: bufferingPolicy,
+        useNullDelimiter: true
+      )
     }
 }
 
@@ -132,6 +155,7 @@ extension AsyncBufferSequence {
         /// The element type for the asynchronous sequence.
         public typealias Element = String
 
+        public let useNullDelimiter: Bool
         private let base: AsyncBufferSequence
         private let bufferingPolicy: BufferingPolicy
 
@@ -147,10 +171,12 @@ extension AsyncBufferSequence {
             private var leftover: Encoding.CodeUnit?
             private var eofReached: Bool
             private let bufferingPolicy: BufferingPolicy
+            private let useNullDelimiter: Bool
 
             internal init(
                 underlyingIterator: AsyncBufferSequence.AsyncIterator,
-                bufferingPolicy: BufferingPolicy
+                bufferingPolicy: BufferingPolicy,
+                useNullDelimiter: Bool
             ) {
                 self.source = underlyingIterator
                 self.buffer = []
@@ -159,6 +185,7 @@ extension AsyncBufferSequence {
                 self.leftover = nil
                 self.eofReached = false
                 self.bufferingPolicy = bufferingPolicy
+                self.useNullDelimiter = useNullDelimiter
             }
 
             /// Retrieves the next line, or returns nil if the sequence ends.
@@ -230,6 +257,7 @@ extension AsyncBufferSequence {
                     return try await nextFromSource()
                 }
 
+                let nullUnit = Encoding.CodeUnit(0x0)
                 // https://en.wikipedia.org/wiki/Newline#Unicode
                 let lineFeed = Encoding.CodeUnit(0x0A)
                 /// let verticalTab     = Encoding.CodeUnit(0x0B)
@@ -282,7 +310,15 @@ extension AsyncBufferSequence {
                     }
 
                     buffer.append(first)
+                    if self.useNullDelimiter {
+                      if first == nullUnit {
+                        return yield()
+                      }
+                      continue // avoid consuming composite newlines
+                    }
                     switch first {
+                    case nullUnit:
+                      return yield()
                     case carriageReturn:
                         // Swallow up any subsequent LF
                         guard let next = try await nextFromSource() else {
@@ -343,17 +379,20 @@ extension AsyncBufferSequence {
         public func makeAsyncIterator() -> AsyncIterator {
             return AsyncIterator(
                 underlyingIterator: self.base.makeAsyncIterator(),
-                bufferingPolicy: self.bufferingPolicy
+                bufferingPolicy: self.bufferingPolicy,
+                useNullDelimiter: useNullDelimiter
             )
         }
 
         internal init(
             underlying: AsyncBufferSequence,
             encoding: Encoding.Type,
-            bufferingPolicy: BufferingPolicy
+            bufferingPolicy: BufferingPolicy,
+            useNullDelimiter: Bool
         ) {
             self.base = underlying
             self.bufferingPolicy = bufferingPolicy
+            self.useNullDelimiter = useNullDelimiter
         }
     }
 }
